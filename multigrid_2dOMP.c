@@ -9,18 +9,32 @@
 #include <math.h>
 #include "util.h"
 #include <string.h>
+#include <omp.h>
 
 //#define DEBUG
+
+int NUM_THREADS;
 
 /* compuate norm of residual */
 double compute_norm(double *u, int N)
 {
   int i,j;
-  double norm = 0.0;
-  for (j = 0; j <= N; j++) {
-    for (i = 0; i <= N*N; i++) {
-      norm += u[i] * u[i];
+  static double norm;// Make static to allow reduction
+  norm = 0.0;
+  if(N > 10 * NUM_THREADS) {
+#pragma omp for private(i,j) reduction(+:norm)
+    for (j = 0; j <= N; j++) {
+      for (i = 0; i <= N*N; i++) {
+        norm += u[i] * u[i];
+      }
     }
+  } else {
+    for (j = 0; j <= N; j++) {
+      for (i = 0; i <= N*N; i++) {
+        norm += u[i] * u[i];
+      }
+    }
+
   }
   return sqrt(norm);
 }
@@ -48,16 +62,32 @@ void output_to_screen (double *u, int N) {
    */
 void coarsen(double *uf, double *uc, int N) {
   int ic, jc, i, j;
-  for(jc = 1; jc < N/2; jc++){
-    j = 2*jc;
-    for (ic = 1; ic < N/2; ic++) {
-      i = 2*ic;
-      uc[ic + (N/2+1)*jc] = 0.25 * uf[i+(N+1)*j] \
-                    + 0.125 * (uf[i-1 + j*(N+1)] + uf[i+1 + j*(N+1)] \
-                            + uf[i + (j+1)*(N+1)] + uf[i + (j-1)*(N+1)])\
-                    + 0.0625 * (uf[i-1 + (j-1)*(N+1)]+ uf[i+1 + (j-1)*(N+1)]\
-                            + uf[i-1 + (j+1)*(N+1)] + uf[i+1 + (j+1)*(N+1)]);
+  if(N > 10 * NUM_THREADS){
+#pragma omp for private(i,j,ic,jc)
+    for(jc = 1; jc < N/2; jc++){
+      j = 2*jc;
+      for (ic = 1; ic < N/2; ic++) {
+        i = 2*ic;
+        uc[ic + (N/2+1)*jc] = 0.25 * uf[i+(N+1)*j] \
+                              + 0.125 * (uf[i-1 + j*(N+1)] + uf[i+1 + j*(N+1)] \
+                                  + uf[i + (j+1)*(N+1)] + uf[i + (j-1)*(N+1)])\
+                              + 0.0625 * (uf[i-1 + (j-1)*(N+1)]+ uf[i+1 + (j-1)*(N+1)]\
+                                  + uf[i-1 + (j+1)*(N+1)] + uf[i+1 + (j+1)*(N+1)]);
+      }
     }
+  } else {
+    for(jc = 1; jc < N/2; jc++){
+      j = 2*jc;
+      for (ic = 1; ic < N/2; ic++) {
+        i = 2*ic;
+        uc[ic + (N/2+1)*jc] = 0.25 * uf[i+(N+1)*j] \
+                              + 0.125 * (uf[i-1 + j*(N+1)] + uf[i+1 + j*(N+1)] \
+                                  + uf[i + (j+1)*(N+1)] + uf[i + (j-1)*(N+1)])\
+                              + 0.0625 * (uf[i-1 + (j-1)*(N+1)]+ uf[i+1 + (j-1)*(N+1)]\
+                                  + uf[i-1 + (j+1)*(N+1)] + uf[i+1 + (j+1)*(N+1)]);
+      }
+    }
+
   }
 }
 
@@ -67,20 +97,40 @@ void coarsen(double *uf, double *uc, int N) {
    */
 void refine_and_add(double *u, double *uf, int N) {
   int i,j;
-  for(j = 1; j < 2*N; j++) {
-    //Take advantage of the fact that n/m = floor(n/m) for positive
-    //ints in ANSI C.
-    int jhf, jhc;
-    jhf = j/2;
-    jhc = (j+1)/2;
-    for(i = 1; i < 2*N; i++) {
-      int ihf, ihc;
-      ihf = i/2;
-      ihc = (i+1)/2;
-      //uf is the average of the nearest neighbors when the coarser grid
-      //is included in the fine grid.
-      uf[i+(2*N+1)*j] += 0.25 * (u[ihf+(N+1)*jhf] + u[ihc+(N+1)*jhf] \
-          +u[ihf +(N+1)*jhc] + u[ihc+(N+1)*jhc]);
+  if(N > 10 * NUM_THREADS) {
+#pragma omp for private(i,j)
+    for(j = 1; j < 2*N; j++) {
+      //Take advantage of the fact that n/m = floor(n/m) for positive
+      //ints in ANSI C.
+      int jhf, jhc;
+      jhf = j/2;
+      jhc = (j+1)/2;
+      for(i = 1; i < 2*N; i++) {
+        int ihf, ihc;
+        ihf = i/2;
+        ihc = (i+1)/2;
+        //uf is the average of the nearest neighbors when the coarser grid
+        //is included in the fine grid.
+        uf[i+(2*N+1)*j] += 0.25 * (u[ihf+(N+1)*jhf] + u[ihc+(N+1)*jhf] \
+            +u[ihf +(N+1)*jhc] + u[ihc+(N+1)*jhc]);
+      }
+    }
+  } else {
+    for(j = 1; j < 2*N; j++) {
+      //Take advantage of the fact that n/m = floor(n/m) for positive
+      //ints in ANSI C.
+      int jhf, jhc;
+      jhf = j/2;
+      jhc = (j+1)/2;
+      for(i = 1; i < 2*N; i++) {
+        int ihf, ihc;
+        ihf = i/2;
+        ihc = (i+1)/2;
+        //uf is the average of the nearest neighbors when the coarser grid
+        //is included in the fine grid.
+        uf[i+(2*N+1)*j] += 0.25 * (u[ihf+(N+1)*jhf] + u[ihc+(N+1)*jhf] \
+            +u[ihf +(N+1)*jhc] + u[ihc+(N+1)*jhc]);
+      }
     }
   }
 }
@@ -89,12 +139,24 @@ void refine_and_add(double *u, double *uf, int N) {
 void compute_residual(double *u, double *rhs, double *res, int N, 
     double invhsq){
   int i,j,ind;
-  for (j = 1; j < N; j++) {
-    for(i = 1; i < N; i++) {
-      ind = i + (N+1)*j;
-      res[ind] = (rhs[ind] - (4.*u[ind] - u[ind - 1] - u[ind+1]\
-            - u[ind-(N+1)] - u[ind+(N+1)]) * invhsq);
+  if(N > 10 * NUM_THREADS) {
+#pragma omp for private(i,j,ind)
+    for (j = 1; j < N; j++) {
+      for(i = 1; i < N; i++) {
+        ind = i + (N+1)*j;
+        res[ind] = (rhs[ind] - (4.*u[ind] - u[ind - 1] - u[ind+1]\
+              - u[ind-(N+1)] - u[ind+(N+1)]) * invhsq);
+      }
     }
+  } else {
+    for (j = 1; j < N; j++) {
+      for(i = 1; i < N; i++) {
+        ind = i + (N+1)*j;
+        res[ind] = (rhs[ind] - (4.*u[ind] - u[ind - 1] - u[ind+1]\
+              - u[ind-(N+1)] - u[ind+(N+1)]) * invhsq);
+      }
+    }
+
   }
 }
 
@@ -115,13 +177,26 @@ void jacobi(double *u, double *rhs, int N, double hsq, int ssteps){
   double omega = 0.8;
   double *unew = calloc(sizeof(double), (N+1)*(N+1));
   for (steps = 0; steps < ssteps; steps++) {
-    for(j = 1; j < N; j++) {
-      for (i = 1; i < N; i++){
-        int ind = i + (N+1)*j;
-        unew[ind]  = (1-omega) * u[ind] +  omega * 0.25 * (hsq*rhs[ind] \
-            + u[ind - 1] + u[ind + 1] + u[ind+(N+1)] \
-            + u[ind-(N+1)]);
+    if(N > 10 * NUM_THREADS) {
+#pragma omp for private(i,j)
+      for(j = 1; j < N; j++) {
+        for (i = 1; i < N; i++){
+          int ind = i + (N+1)*j;
+          unew[ind]  = (1-omega) * u[ind] +  omega * 0.25 * (hsq*rhs[ind] \
+              + u[ind - 1] + u[ind + 1] + u[ind+(N+1)] \
+              + u[ind-(N+1)]);
+        }
       }
+    } else {
+      for(j = 1; j < N; j++) {
+        for (i = 1; i < N; i++){
+          int ind = i + (N+1)*j;
+          unew[ind]  = (1-omega) * u[ind] +  omega * 0.25 * (hsq*rhs[ind] \
+              + u[ind - 1] + u[ind + 1] + u[ind+(N+1)] \
+              + u[ind-(N+1)]);
+        }
+      }
+
     }
     memcpy(u, unew, (N+1)*(N+1)*sizeof(double));
   }
@@ -135,8 +210,7 @@ int main(int argc, char * argv[]) {
   if (argc < 3 || argc > 4) {
     fprintf(stderr, "Usage: ./multigrid_2d Nfine maxiter [s-steps]\n");
     fprintf(stderr, "Nfine: # of intervals, must be power of two number\n");
-    fprintf(stderr, "s-steps: # jacobi smoothing steps (optional, default"
-            " is 3)\n");
+    fprintf(stderr, "s-steps: # jacobi smoothing steps (optional, default is 3)\n");
     abort();
   }
   sscanf(argv[1], "%d", &Nfine);
@@ -149,6 +223,15 @@ int main(int argc, char * argv[]) {
   printf("Multigrid Solve using V-cycles for -u'' = f on (0,1)x(0,1)\n");
   printf("Number of intervals = %d, max_iters = %d\n", Nfine, max_iters);
   printf("Number of MG levels: %d \n", levels);
+
+#pragma omp parallel
+  {
+    NUM_THREADS = omp_get_num_threads();
+    int thread_num = omp_get_thread_num();
+    if(thread_num == 1) {
+      printf("Processing with %d threads.\n", NUM_THREADS);
+    }
+  }
 
   /* timing */
   timestamp_type time1, time2;
