@@ -12,7 +12,7 @@
 #include <omp.h>
 
 //#define DEBUG
-
+#define MIN_WORK_PER_THREAD 128
 int NUM_THREADS;
 
 /* compuate norm of residual */
@@ -21,8 +21,8 @@ double compute_norm(double *u, int N)
   int i,j;
   static double norm;// Make static to allow reduction
   norm = 0.0;
-  if(N > 10 * NUM_THREADS) {
-#pragma omp for private(i,j) reduction(+:norm)
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+#pragma omp parallel for private(i) reduction(+:norm)
     for (j = 0; j <= N; j++) {
       for (i = 0; i <= N*N; i++) {
         norm += u[i] * u[i];
@@ -62,8 +62,8 @@ void output_to_screen (double *u, int N) {
    */
 void coarsen(double *uf, double *uc, int N) {
   int ic, jc, i, j;
-  if(N > 10 * NUM_THREADS){
-#pragma omp for private(i,j,ic,jc)
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS){
+#pragma omp parallel for private(i,j,ic)
     for(jc = 1; jc < N/2; jc++){
       j = 2*jc;
       for (ic = 1; ic < N/2; ic++) {
@@ -97,8 +97,8 @@ void coarsen(double *uf, double *uc, int N) {
    */
 void refine_and_add(double *u, double *uf, int N) {
   int i,j;
-  if(N > 10 * NUM_THREADS) {
-#pragma omp for private(i,j)
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+#pragma omp parallel for private(i)
     for(j = 1; j < 2*N; j++) {
       //Take advantage of the fact that n/m = floor(n/m) for positive
       //ints in ANSI C.
@@ -139,8 +139,8 @@ void refine_and_add(double *u, double *uf, int N) {
 void compute_residual(double *u, double *rhs, double *res, int N, 
     double invhsq){
   int i,j,ind;
-  if(N > 10 * NUM_THREADS) {
-#pragma omp for private(i,j,ind)
+  if(N > 128 * NUM_THREADS) {
+#pragma omp parallel for private(i,ind)
     for (j = 1; j < N; j++) {
       for(i = 1; i < N; i++) {
         ind = i + (N+1)*j;
@@ -177,8 +177,8 @@ void jacobi(double *u, double *rhs, int N, double hsq, int ssteps){
   double omega = 0.8;
   double *unew = calloc(sizeof(double), (N+1)*(N+1));
   for (steps = 0; steps < ssteps; steps++) {
-    if(N > 10 * NUM_THREADS) {
-#pragma omp for private(i,j)
+    if(N > 128 * NUM_THREADS) {
+#pragma omp parallel for private(i)
       for(j = 1; j < N; j++) {
         for (i = 1; i < N; i++){
           int ind = i + (N+1)*j;
@@ -228,7 +228,7 @@ int main(int argc, char * argv[]) {
   {
     NUM_THREADS = omp_get_num_threads();
     int thread_num = omp_get_thread_num();
-    if(thread_num == 1) {
+    if(thread_num == 0) {
       printf("Processing with %d threads.\n", NUM_THREADS);
     }
   }

@@ -11,30 +11,40 @@
 #include <string.h>
 #include <omp.h>
 
+#define MIN_WORK_PER_THREAD 1024
+
+int NUM_THREADS;
+
 /* compuate norm of residual */
 double compute_norm(double *u, int N)
 {
   int i;
   double norm = 0.0;
   double *indiv_norms;
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
 #pragma omp parallel shared(indiv_norms, norm) private(i)
-  {
-    int threadnum = omp_get_thread_num();
-    int total_threads = omp_get_num_threads();
-    if(threadnum == 0) {
-      indiv_norms = calloc(total_threads, sizeof(double));
-    }
+    {
+      int threadnum = omp_get_thread_num();
+      int total_threads = omp_get_num_threads();
+      if(threadnum == 0) {
+        indiv_norms = calloc(total_threads, sizeof(double));
+      }
 
 #pragma omp barrier
 
 #pragma omp for 
-    for (i = 0; i <= N; i++)
-      indiv_norms[threadnum] += u[i] * u[i];
-    if(threadnum == 0) {
-      //Manual reduction
-      for(i = 0; i < total_threads; i++) {
-        norm += indiv_norms[i];
+      for (i = 0; i <= N; i++)
+        indiv_norms[threadnum] += u[i] * u[i];
+      if(threadnum == 0) {
+        //Manual reduction
+        for(i = 0; i < total_threads; i++) {
+          norm += indiv_norms[i];
+        }
       }
+    }
+  } else {
+    for(i = 0; i <= N; i++) {
+      norm += u[i] * u[i];
     }
   }
   return sqrt(norm);
@@ -60,8 +70,15 @@ void output_to_screen (double *u, int N) {
    */
 void coarsen(double *uf, double *uc, int N) {
   int ic;
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+  #pragma omp parallel for
   for (ic = 1; ic < N/2; ++ic)
     uc[ic] = 0.5 * uf[2*ic] + 0.25 * (uf[2*ic-1]+uf[2*ic+1]);
+  } else {
+    for (ic = 1; ic < N/2; ++ic)
+      uc[ic] = 0.5 * uf[2*ic] + 0.25 * (uf[2*ic-1]+uf[2*ic+1]);
+
+  }
 }
 
 
@@ -72,10 +89,17 @@ void refine_and_add(double *u, double *uf, int N)
 {
   int i;
   uf[1] += 0.5 * (u[0] + u[1]);
-#pragma omp for private(i)
-  for (i = 1; i < N; ++i) {
-    uf[2*i] += u[i];
-    uf[2*i+1] += 0.5 * (u[i] + u[i+1]);
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+#pragma omp parallel for private(i)
+    for (i = 1; i < N; ++i) {
+      uf[2*i] += u[i];
+      uf[2*i+1] += 0.5 * (u[i] + u[i+1]);
+    }
+  } else {
+    for (i = 1; i < N; ++i) {
+      uf[2*i] += u[i];
+      uf[2*i+1] += 0.5 * (u[i] + u[i+1]);
+    }
   }
 }
 
@@ -83,9 +107,15 @@ void refine_and_add(double *u, double *uf, int N)
 void compute_residual(double *u, double *rhs, double *res, int N, double invhsq)
 {
   int i;
-#pragma omp for private(i)
-  for (i = 1; i < N; i++)
-    res[i] = (rhs[i] - (2.*u[i] - u[i-1] - u[i+1]) * invhsq);
+  if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+#pragma omp parallel for private(i) 
+    for (i = 1; i < N; i++)
+      res[i] = (rhs[i] - (2.*u[i] - u[i-1] - u[i+1]) * invhsq);
+  } else {
+    for (i = 1; i < N; i++)
+      res[i] = (rhs[i] - (2.*u[i] - u[i-1] - u[i+1]) * invhsq);
+
+  }
 }
 
 
@@ -108,9 +138,15 @@ void jacobi(double *u, double *rhs, int N, double hsq, int ssteps)
   double omega = 2./3.;
   double *unew = calloc(sizeof(double), N+1);
   for (j = 0; j < ssteps; ++j) {
-#pragma omp for private(i) 
-    for (i = 1; i < N; i++){
-      unew[i]  = u[i] +  omega * 0.5 * (hsq*rhs[i] + u[i - 1] + u[i + 1] - 2*u[i]);
+    if(N >= MIN_WORK_PER_THREAD * NUM_THREADS) {
+#pragma omp parallel for private(i) 
+      for (i = 1; i < N; i++){
+        unew[i]  = u[i] +  omega * 0.5 * (hsq*rhs[i] + u[i - 1] + u[i + 1] - 2*u[i]);
+      }
+    } else {
+      for (i = 1; i < N; i++){
+        unew[i]  = u[i] +  omega * 0.5 * (hsq*rhs[i] + u[i - 1] + u[i + 1] - 2*u[i]);
+      }
     }
     memcpy(u, unew, (N+1)*sizeof(double));
   }
@@ -135,9 +171,16 @@ int main(int argc, char * argv[])
 
   /* compute number of multigrid levels */
   levels = floor(log2(Nfine));
+#ifdef DEBUG
   printf("Multigrid Solve using V-cycles for -u'' = f on (0,1)\n");
   printf("Number of intervals = %d, max_iters = %d\n", Nfine, max_iters);
   printf("Number of MG levels: %d \n", levels);
+#endif
+
+  #pragma omp parallel
+  {
+    NUM_THREADS = omp_get_num_threads();
+  }
 
   /* timing */
   timestamp_type time1, time2;
@@ -154,7 +197,9 @@ int main(int argc, char * argv[])
     N[l] = Nfine / (int) pow(2,l);
     double h = 1.0 / N[l];
     hsq[l] = h * h;
+#ifdef DEBUG
     printf("MG level %2d, N = %8d\n", l, N[l]);
+#endif
     invhsq[l] = 1.0 / hsq[l];
     u[l]    = (double *) calloc(sizeof(double), N[l]+1);
     rhs[l] = (double *) calloc(sizeof(double), N[l]+1);
@@ -195,9 +240,13 @@ int main(int argc, char * argv[])
     if (0 == (iter % 1)) {
       compute_residual(u[0], rhs[0], res, N[0], invhsq[0]);
       res_norm = compute_norm(res, N[0]);
+#ifdef DEBUG
       printf("[Iter %d] Residual norm: %2.8f\n", iter, res_norm);
+#endif    
     }
   }
+
+
 
   /* Clean up */
   free (hsq);
@@ -213,5 +262,10 @@ int main(int argc, char * argv[])
   get_timestamp(&time2);
   double elapsed = timestamp_diff_in_seconds(time1,time2);
   printf("Time elapsed is %f seconds.\n", elapsed);
+  #pragma omp parallel
+  {  
+    if(omp_get_thread_num() == 0)
+      printf("Using %d processes; took %d iterations\n", NUM_THREADS, iter);
+  }
   return 0;
 }
